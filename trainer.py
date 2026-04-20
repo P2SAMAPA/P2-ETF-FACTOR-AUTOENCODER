@@ -14,10 +14,31 @@ from autoencoder_model import AutoencoderTrainer
 import push_results
 
 def compute_factor_momentum(factor_returns: np.ndarray, window: int = 20) -> np.ndarray:
-    """Compute momentum for each factor."""
+    """Compute momentum for each factor (total return over window)."""
     if len(factor_returns) < window + 1:
         return np.zeros(factor_returns.shape[1])
     return (factor_returns[-1] - factor_returns[-window-1]) / (np.abs(factor_returns[-window-1]) + 1e-6)
+
+def compute_factor_trend(factor_returns: np.ndarray, window: int = 10) -> np.ndarray:
+    """Compute trend (slope) of each factor over the window."""
+    n_factors = factor_returns.shape[1]
+    trends = np.zeros(n_factors)
+    if len(factor_returns) < window:
+        return trends
+    x = np.arange(window)
+    for i in range(n_factors):
+        y = factor_returns[-window:, i]
+        slope = np.polyfit(x, y, 1)[0]
+        trends[i] = slope
+    return trends
+
+def compute_cross_sectional_momentum(returns: pd.DataFrame, window: int = 20) -> pd.Series:
+    """Compute each ETF's return over the window and return as a Series."""
+    if len(returns) < window:
+        return pd.Series(index=returns.columns, data=0.0)
+    recent = returns.iloc[-window:]
+    cum_ret = (1 + recent).prod() - 1
+    return cum_ret
 
 def compute_residual_alpha(actual: pd.DataFrame, reconstructed: np.ndarray,
                            scaler, window: int = 10) -> pd.Series:
@@ -40,9 +61,11 @@ def compute_reconstruction_anomaly(errors: np.ndarray, lookback: int = 252) -> f
 
 def compute_combined_signals(factor_returns: np.ndarray, exposures: dict,
                              reconstruction_anomaly: float, residual_alpha: pd.Series,
-                             tickers: list, weights: dict) -> dict:
-    """Compute combined score for each ETF."""
+                             cross_sectional_mom: pd.Series, tickers: list,
+                             weights: dict, returns_data: pd.DataFrame) -> dict:
+    """Compute combined score for each ETF using all five signals."""
     fm = compute_factor_momentum(factor_returns, config.FACTOR_MOMENTUM_WINDOW)
+    ft = compute_factor_trend(factor_returns, config.FACTOR_TREND_WINDOW)
     
     scores = {}
     for ticker in tickers:
@@ -51,33 +74,43 @@ def compute_combined_signals(factor_returns: np.ndarray, exposures: dict,
         
         beta = exposures[ticker]
         fm_signal = np.dot(beta, fm)
+        ft_signal = np.dot(beta, ft)
         ra_signal = residual_alpha[ticker]
+        csm_signal = cross_sectional_mom.get(ticker, 0.0)
         re_signal = reconstruction_anomaly
         
-        # Z-score normalization across tickers (done after all computed)
         scores[ticker] = {
             'factor_momentum_raw': fm_signal,
+            'factor_trend_raw': ft_signal,
             'residual_alpha_raw': ra_signal,
+            'cross_sectional_momentum_raw': csm_signal,
             'reconstruction_error_raw': re_signal
         }
     
-    # Normalize each component to z-scores
     if scores:
         fm_vals = np.array([s['factor_momentum_raw'] for s in scores.values()])
+        ft_vals = np.array([s['factor_trend_raw'] for s in scores.values()])
         ra_vals = np.array([s['residual_alpha_raw'] for s in scores.values()])
+        csm_vals = np.array([s['cross_sectional_momentum_raw'] for s in scores.values()])
         
         fm_z = stats.zscore(fm_vals) if fm_vals.std() > 0 else np.zeros_like(fm_vals)
+        ft_z = stats.zscore(ft_vals) if ft_vals.std() > 0 else np.zeros_like(ft_vals)
         ra_z = stats.zscore(ra_vals) if ra_vals.std() > 0 else np.zeros_like(ra_vals)
-        re_z = reconstruction_anomaly  # Same for all ETFs
+        csm_z = stats.zscore(csm_vals) if csm_vals.std() > 0 else np.zeros_like(csm_vals)
+        re_z = reconstruction_anomaly
         
         for i, ticker in enumerate(scores.keys()):
             scores[ticker]['factor_momentum_z'] = fm_z[i]
+            scores[ticker]['factor_trend_z'] = ft_z[i]
             scores[ticker]['residual_alpha_z'] = ra_z[i]
+            scores[ticker]['cross_sectional_momentum_z'] = csm_z[i]
             scores[ticker]['reconstruction_error_z'] = re_z
             
             total = (weights['factor_momentum'] * fm_z[i] +
+                     weights['factor_trend'] * ft_z[i] +
                      weights['reconstruction_error'] * re_z +
-                     weights['residual_alpha'] * ra_z[i])
+                     weights['residual_alpha'] * ra_z[i] +
+                     weights['cross_sectional_momentum'] * csm_z[i])
             scores[ticker]['total_score'] = total
     
     return scores
@@ -86,12 +119,10 @@ def run_autoencoder_pipeline():
     print(f"=== P2-ETF-FACTOR-AUTOENCODER Run: {config.TODAY} ===")
     df_master = data_manager.load_master_data()
     
-    # Combined universe for global training
     all_tickers = config.ALL_TICKERS
     full_features = data_manager.prepare_full_feature_matrix(df_master, all_tickers)
     print(f"Global training data: {len(full_features)} days, {len(full_features.columns)} features")
     
-    # Train global model
     trainer = AutoencoderTrainer(
         latent_dim=config.LATENT_DIM,
         hidden_dims=config.HIDDEN_DIMS,
@@ -103,15 +134,17 @@ def run_autoencoder_pipeline():
     print("\n--- Training Global Autoencoder ---")
     trainer.fit(full_features)
     
-    # Extract global factors
     global_factors = trainer.transform(full_features)
     global_reconstructed, global_errors = trainer.reconstruct(full_features)
     global_exposures = trainer.get_etf_exposures(full_features)
     
-    # Compute signals
     reconstruction_anomaly = compute_reconstruction_anomaly(global_errors, config.ANOMALY_LOOKBACK)
     residual_alpha = compute_residual_alpha(full_features, global_reconstructed, 
                                             trainer.scaler, config.RESIDUAL_ALPHA_WINDOW)
+    
+    # Cross-sectional momentum from original returns (only ETF columns)
+    etf_returns = full_features[all_tickers]
+    cross_sectional_mom = compute_cross_sectional_momentum(etf_returns, config.CROSS_SECTIONAL_MOMENTUM_WINDOW)
     
     all_results = {
         "global_model": {
@@ -122,7 +155,6 @@ def run_autoencoder_pipeline():
         }
     }
     
-    # Compute scores per universe and get top picks
     global_top_picks = {}
     global_scores_all = {}
     
@@ -131,7 +163,8 @@ def run_autoencoder_pipeline():
         available_tickers = [t for t in tickers if t in global_exposures]
         scores = compute_combined_signals(
             global_factors, global_exposures, reconstruction_anomaly,
-            residual_alpha, available_tickers, config.SIGNAL_WEIGHTS
+            residual_alpha, cross_sectional_mom, available_tickers,
+            config.SIGNAL_WEIGHTS, etf_returns
         )
         global_scores_all[universe_name] = scores
         
@@ -147,7 +180,6 @@ def run_autoencoder_pipeline():
     all_results['global_model']['signals'] = global_scores_all
     all_results['global_model']['top_picks'] = global_top_picks
     
-    # Shrinking windows
     print("\n--- Shrinking Windows ---")
     shrinking_results = {}
     
@@ -182,13 +214,16 @@ def run_autoencoder_pipeline():
         win_anomaly = compute_reconstruction_anomaly(win_errors, min(config.ANOMALY_LOOKBACK, len(win_errors)//2))
         win_residual = compute_residual_alpha(window_features, win_reconstructed,
                                               window_trainer.scaler, config.RESIDUAL_ALPHA_WINDOW)
+        win_etf_returns = window_features[all_tickers]
+        win_csm = compute_cross_sectional_momentum(win_etf_returns, config.CROSS_SECTIONAL_MOMENTUM_WINDOW)
         
         window_top_picks = {}
         for universe_name, tickers in config.UNIVERSES.items():
             available_tickers = [t for t in tickers if t in win_exposures]
             win_scores = compute_combined_signals(
                 win_factors, win_exposures, win_anomaly,
-                win_residual, available_tickers, config.SIGNAL_WEIGHTS
+                win_residual, win_csm, available_tickers,
+                config.SIGNAL_WEIGHTS, win_etf_returns
             )
             if win_scores:
                 top_ticker = max(win_scores, key=lambda t: win_scores[t]['total_score'])
@@ -206,7 +241,6 @@ def run_autoencoder_pipeline():
     
     all_results['shrinking_windows'] = shrinking_results
     
-    # Add config and push
     output_payload = {
         "run_date": config.TODAY,
         "config": {
@@ -214,7 +248,9 @@ def run_autoencoder_pipeline():
             "hidden_dims": config.HIDDEN_DIMS,
             "signal_weights": config.SIGNAL_WEIGHTS,
             "factor_momentum_window": config.FACTOR_MOMENTUM_WINDOW,
+            "factor_trend_window": config.FACTOR_TREND_WINDOW,
             "residual_alpha_window": config.RESIDUAL_ALPHA_WINDOW,
+            "cross_sectional_momentum_window": config.CROSS_SECTIONAL_MOMENTUM_WINDOW,
             "anomaly_lookback": config.ANOMALY_LOOKBACK
         },
         **all_results
