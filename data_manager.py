@@ -53,6 +53,7 @@ def prepare_returns_matrix(df_wide: pd.DataFrame, tickers: list) -> pd.DataFrame
 def prepare_macro_features(df_wide: pd.DataFrame) -> pd.DataFrame:
     """
     Extract macro columns and return as DataFrame with Date index.
+    Uses only columns listed in config.MACRO_COLS.
     """
     macro_cols = [c for c in config.MACRO_COLS if c in df_wide.columns]
     macro_df = df_wide[['Date'] + macro_cols].copy()
