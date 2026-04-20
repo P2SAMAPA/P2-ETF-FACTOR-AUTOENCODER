@@ -64,13 +64,17 @@ def display_hero_card(ticker: str, total_score: float, components: dict):
     """, unsafe_allow_html=True)
     
     with st.expander("📊 Signal Breakdown", expanded=False):
-        col1, col2, col3 = st.columns(3)
-        with col1:
+        cols = st.columns(5)
+        with cols[0]:
             st.metric("Factor Momentum (z)", f"{components.get('factor_momentum_z', 0):.3f}")
-        with col2:
+        with cols[1]:
+            st.metric("Factor Trend (z)", f"{components.get('factor_trend_z', 0):.3f}")
+        with cols[2]:
             st.metric("Reconstruction Anomaly (z)", f"{components.get('reconstruction_error_z', 0):.3f}")
-        with col3:
+        with cols[3]:
             st.metric("Residual Alpha (z)", f"{components.get('residual_alpha_z', 0):.3f}")
+        with cols[4]:
+            st.metric("Cross-Sectional Mom (z)", f"{components.get('cross_sectional_momentum_z', 0):.3f}")
 
 # --- Sidebar ---
 st.sidebar.markdown("## ⚙️ Configuration")
@@ -89,8 +93,10 @@ st.sidebar.markdown(f"- Latent Factors: **{config.LATENT_DIM}**")
 st.sidebar.markdown(f"- Hidden Dims: **{config.HIDDEN_DIMS}**")
 st.sidebar.markdown(f"- Signal Weights:")
 st.sidebar.markdown(f"  - Factor Momentum: **{config.SIGNAL_WEIGHTS['factor_momentum']:.2f}**")
+st.sidebar.markdown(f"  - Factor Trend: **{config.SIGNAL_WEIGHTS['factor_trend']:.2f}**")
 st.sidebar.markdown(f"  - Reconstruction Error: **{config.SIGNAL_WEIGHTS['reconstruction_error']:.2f}**")
 st.sidebar.markdown(f"  - Residual Alpha: **{config.SIGNAL_WEIGHTS['residual_alpha']:.2f}**")
+st.sidebar.markdown(f"  - Cross‑Sectional Mom: **{config.SIGNAL_WEIGHTS['cross_sectional_momentum']:.2f}**")
 st.sidebar.divider()
 
 data = load_latest_results()
@@ -102,10 +108,12 @@ else:
 st.sidebar.divider()
 st.sidebar.markdown("### 📖 About")
 st.sidebar.markdown("""
-**Factor Autoencoder** extracts latent market factors from ETF returns and macro data, then combines three signals to rank ETFs:
-- **Factor Momentum**: Recent strength of each factor
+**Factor Autoencoder** extracts latent market factors from ETF returns and macro data, then combines five signals to rank ETFs:
+- **Factor Momentum**: Recent total return of each factor
+- **Factor Trend**: Recent slope (acceleration) of each factor
 - **Reconstruction Anomaly**: How unusual today's market behavior is
 - **Residual Alpha**: ETF‑specific return not explained by factors
+- **Cross‑Sectional Momentum**: ETF's own recent return vs. peers
 """)
 
 # --- Main Content ---
@@ -143,9 +151,11 @@ with tab1:
                         rows.append({
                             'Ticker': ticker,
                             'Total Score': f"{s['total_score']:.3f}",
-                            'Factor Mom (z)': f"{s.get('factor_momentum_z', 0):.3f}",
-                            'Recon Anom (z)': f"{s.get('reconstruction_error_z', 0):.3f}",
-                            'Resid Alpha (z)': f"{s.get('residual_alpha_z', 0):.3f}"
+                            'FM (z)': f"{s.get('factor_momentum_z', 0):.3f}",
+                            'FT (z)': f"{s.get('factor_trend_z', 0):.3f}",
+                            'RE (z)': f"{s.get('reconstruction_error_z', 0):.3f}",
+                            'RA (z)': f"{s.get('residual_alpha_z', 0):.3f}",
+                            'CSM (z)': f"{s.get('cross_sectional_momentum_z', 0):.3f}"
                         })
                     df = pd.DataFrame(rows).sort_values('Total Score', ascending=False)
                     st.dataframe(df, use_container_width=True, hide_index=True)
@@ -156,7 +166,6 @@ with tab2:
     st.markdown("### Latent Factor Returns Over Time")
     
     factor_returns = np.array(data['global_model']['factor_returns'])
-    # Create date range based on number of observations
     dates = pd.date_range(end=config.TODAY, periods=len(factor_returns))
     
     fig_factors = go.Figure()
@@ -177,11 +186,9 @@ with tab2:
     st.markdown("### ETF Factor Exposures (Betas)")
     exposures = data['global_model']['factor_exposures']
     if exposures:
-        # Convert to DataFrame
         exp_df = pd.DataFrame(exposures).T
         exp_df.columns = [f'Factor {i+1}' for i in range(exp_df.shape[1])]
         
-        # Heatmap
         fig_heat = px.imshow(
             exp_df.T,
             labels=dict(x="ETF", y="Factor", color="Exposure"),
@@ -193,7 +200,6 @@ with tab2:
         fig_heat.update_layout(height=450)
         st.plotly_chart(fig_heat, use_container_width=True)
         
-        # Table view
         with st.expander("View Exposures Table"):
             st.dataframe(exp_df.style.background_gradient(cmap='RdBu', axis=None), use_container_width=True)
     else:
@@ -226,7 +232,6 @@ with tab3:
                 df_win = pd.DataFrame(rows)
                 st.dataframe(df_win, use_container_width=True, hide_index=True)
                 
-                # Line chart of scores across windows
                 df_chart = df_win.copy()
                 df_chart['Score_val'] = df_chart['Score'].astype(float)
                 fig = go.Figure(go.Scatter(
