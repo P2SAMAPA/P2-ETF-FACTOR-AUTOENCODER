@@ -51,9 +51,9 @@ ANOMALY_LOOKBACK = 252              # Days for reconstruction error baseline
 SIGNAL_WEIGHTS = {
     "factor_momentum": 0.25,
     "factor_trend": 0.20,
-    "reconstruction_error": 0.15,
+    "reconstruction_error": 0.10,
     "residual_alpha": 0.20,
-    "cross_sectional_momentum": 0.20
+    "cross_sectional_momentum": 0.25
 }
 
 # --- Shrinking Windows ---
