@@ -42,14 +42,18 @@ RANDOM_SEED = 42
 
 # --- Signal Computation Parameters ---
 FACTOR_MOMENTUM_WINDOW = 20         # Days for factor momentum
+FACTOR_TREND_WINDOW = 10            # Days for factor trend (slope)
 RESIDUAL_ALPHA_WINDOW = 10          # EWMA window for residual alpha
+CROSS_SECTIONAL_MOMENTUM_WINDOW = 20  # Days for cross-sectional momentum
 ANOMALY_LOOKBACK = 252              # Days for reconstruction error baseline
 
 # --- Signal Weights (must sum to 1.0) ---
 SIGNAL_WEIGHTS = {
-    "factor_momentum": 0.33,
-    "reconstruction_error": 0.33,
-    "residual_alpha": 0.34
+    "factor_momentum": 0.25,
+    "factor_trend": 0.20,
+    "reconstruction_error": 0.15,
+    "residual_alpha": 0.20,
+    "cross_sectional_momentum": 0.20
 }
 
 # --- Shrinking Windows ---
