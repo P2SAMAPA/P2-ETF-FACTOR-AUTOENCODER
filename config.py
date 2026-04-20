@@ -28,8 +28,8 @@ UNIVERSES = {
     "COMBINED": ALL_TICKERS
 }
 
-# --- Macro Columns (used as predictors) ---
-MACRO_COLS = ["VIX", "DXY", "T10Y2Y", "TBILL_3M", "IG_SPREAD", "HY_SPREAD"]
+# --- Macro Columns (using only those available from 2008) ---
+MACRO_COLS = ["VIX", "DXY", "T10Y2Y", "TBILL_3M"]
 
 # --- Autoencoder Parameters ---
 LATENT_DIM = 3                      # Number of latent factors
