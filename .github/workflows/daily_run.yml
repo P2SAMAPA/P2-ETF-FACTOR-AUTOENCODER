@@ -2,7 +2,7 @@ name: Daily Factor Autoencoder Run
 
 on:
   schedule:
-    - cron: '40 00 * * 1-6'   # 2 PM UTC, Mon-Fri
+    - cron: '40 02 * * 1-6'   # 2 PM UTC, Mon-Fri
   workflow_dispatch:
 
 jobs:
